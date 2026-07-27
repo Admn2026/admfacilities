@@ -178,13 +178,51 @@ const ADMIN_PASSWORD = "Adm@2026";
 // pela URL real que a Vercel te der, terminando em "/api/send-email".
 const EMAIL_API_URL = "https://chamados-facilities-two.vercel.app/api/send-email";
 
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function buildEmailHtml(subject, body) {
+  const protocolMatch = subject.match(/[A-Z]+-\d{4}-\d{4}/);
+  const protocol = protocolMatch ? protocolMatch[0] : null;
+  return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F2EC;padding:24px 0;font-family:Arial,Helvetica,sans-serif;">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #DDD6C8;">
+        <tr>
+          <td style="background:#1F3A5F;padding:18px 24px;">
+            <span style="color:#F2A93B;font-weight:bold;font-size:13px;letter-spacing:1px;">CENTRAL DE FACILITIES</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:28px 24px 8px;">
+            <h1 style="margin:0 0 14px;font-size:19px;color:#1F2937;font-family:Arial,Helvetica,sans-serif;">${escapeHtml(subject)}</h1>
+            <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#374151;">${escapeHtml(body)}</p>
+            ${protocol ? `<div style="display:inline-block;background:#FBF0DE;border:1px solid #F2A93B;border-radius:6px;padding:8px 14px;font-family:'Courier New',monospace;font-weight:bold;color:#C97A1F;font-size:15px;">${protocol}</div>` : ""}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 24px;background:#F7F5F0;border-top:1px solid #EDEAE0;">
+            <p style="margin:0;font-size:11px;color:#9AA5B1;">Central de Facilities · Documento interno · Este é um e-mail automático, não é necessário responder.</p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>`;
+}
+
 async function sendRealEmail(to, subject, body) {
   if (!EMAIL_API_URL || EMAIL_API_URL.includes("SEU-PROJETO")) return; // função ainda não configurada
   try {
     await fetch(EMAIL_API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to, subject, body }),
+      body: JSON.stringify({ to, subject, body, html: buildEmailHtml(subject, body) }),
     });
   } catch (err) {
     console.error("Falha ao enviar e-mail real:", err);
