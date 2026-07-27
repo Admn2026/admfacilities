@@ -17,9 +17,6 @@
 </style>
 </head>
 <body>
-<div id="local-mode-banner" style="background:#1F2937;color:#F2D8A3;font-size:12px;text-align:center;padding:6px 12px;font-family:Inter,sans-serif;">
-  Modo local de demonstração — os dados ficam salvos apenas neste navegador (não são compartilhados entre pessoas ou dispositivos).
-</div>
 <div id="root"></div>
 
 <script type="text/babel" data-presets="react,env">
@@ -529,8 +526,6 @@ function HomeScreen({ ticketCount, requisicaoCount, onNavigate }) {
             eyebrow="ACOMPANHAMENTO · STATUS E CHAT"
             title="Acompanhar Chamado"
             description="Veja o status do seu chamado e converse em tempo real com a equipe."
-            InfoIcon={ClipboardList}
-            infoText={ticketCount === null ? "carregando…" : `${ticketCount} chamado${ticketCount === 1 ? "" : "s"} registrado${ticketCount === 1 ? "" : "s"}`}
             onClick={() => onNavigate("acompanhar")}
           />
           <HomeCard
@@ -538,8 +533,6 @@ function HomeScreen({ ticketCount, requisicaoCount, onNavigate }) {
             eyebrow="TODA SEXTA-FEIRA"
             title="Requisição de Materiais"
             description="Solicite material de escritório e insumos para a próxima entrega."
-            InfoIcon={ClipboardList}
-            infoText={requisicaoCount === null ? "carregando…" : `${requisicaoCount} requisição${requisicaoCount === 1 ? "" : "ões"} registrada${requisicaoCount === 1 ? "" : "s"}`}
             onClick={() => onNavigate("materiais")}
             badge="NOVO"
           />
@@ -573,7 +566,7 @@ function HomeCard({ icon: CardIcon, eyebrow, title, description, InfoIcon, infoT
         <p className="text-sm mb-5" style={{ color: "#9FB0C4" }}>{description}</p>
         <div className="border-t pt-4 flex items-center justify-between" style={{ borderColor: "#223751" }}>
           <span className="text-xs flex items-center gap-1.5" style={{ color: "#7C8CA0" }}>
-            <InfoIcon size={13} /> {infoText}
+            {InfoIcon && <InfoIcon size={13} />} {infoText}
           </span>
           <span className="text-[11px] font-semibold flex items-center gap-1 group-hover:gap-2 transition-all" style={{ color: "#F2A93B", letterSpacing: "0.05em" }}>
             ABRIR →
