@@ -344,9 +344,14 @@ function FacilitiesApp() {
     entries.forEach(e => sendRealEmail(e.to, e.subject, e.body));
   }
 
+  async function nextProtocolSeq() {
+    const [allTickets, allReq] = await Promise.all([loadTickets(), loadRequisicoes()]);
+    return allTickets.length + allReq.length + 1;
+  }
+
   async function createTicket(form) {
     const current = tickets || [];
-    const num = current.length + 1;
+    const num = await nextProtocolSeq();
     const protocol = protocolFor("CH", num);
     const now = new Date().toISOString();
     const ticket = { id: protocol, ...form, status: "aberto", createdAt: now, updatedAt: now };
@@ -376,7 +381,7 @@ function FacilitiesApp() {
 
   async function createRequisicao(form) {
     const current = requisicoes || [];
-    const num = current.length + 1;
+    const num = await nextProtocolSeq();
     const protocol = protocolFor("REQ", num);
     const now = new Date().toISOString();
     const requisicao = { id: protocol, nome: form.nome, email: form.email, setor: form.setor, itens: form.itens, outros: form.outros, entregues: {}, status: "pendente", createdAt: now, updatedAt: now };
@@ -433,6 +438,7 @@ function FacilitiesApp() {
   }
 
   const selectedTicket = (tickets || []).find(t => t.id === selected) || null;
+  const selectedRequisicao = (requisicoes || []).find(r => r.id === selected) || null;
 
   return (
     <>
@@ -471,7 +477,9 @@ function FacilitiesApp() {
             {tab === "acompanhar" && (
               selectedTicket
                 ? <TicketDetail ticket={selectedTicket} thread={thread} viewer="usuario" onBack={() => setSelected(null)} onSend={(text) => sendChat(selectedTicket.id, "usuario", text)} />
-                : <AcompanharBusca tickets={tickets} onFound={(id) => setSelected(id)} />
+                : selectedRequisicao
+                  ? <RequisicaoStatusView requisicao={selectedRequisicao} onBack={() => setSelected(null)} />
+                  : <AcompanharBusca tickets={tickets} requisicoes={requisicoes} onFound={(id) => setSelected(id)} />
             )}
             {tab === "painel" && (
               !painelAuth
@@ -525,7 +533,7 @@ function HomeScreen({ ticketCount, requisicaoCount, onNavigate }) {
             icon={SearchIcon}
             eyebrow="ACOMPANHAMENTO · STATUS E CHAT"
             title="Acompanhar Chamado"
-            description="Veja o status do seu chamado e converse em tempo real com a equipe."
+            description="Veja o status do seu chamado ou requisição, e converse em tempo real com a equipe."
             onClick={() => onNavigate("acompanhar")}
           />
           <HomeCard
@@ -874,24 +882,26 @@ function QtyRow({ label, value, onChange, emFalta }) {
   );
 }
 
-function AcompanharBusca({ tickets, onFound }) {
+function AcompanharBusca({ tickets, requisicoes, onFound }) {
   const [protocolo, setProtocolo] = useState("");
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
 
-  if (tickets === null) return <EmptyState icon={Clock} title="Carregando..." body="Buscando chamados." />;
+  if (tickets === null || requisicoes === null) return <EmptyState icon={Clock} title="Carregando..." body="Buscando chamados e requisições." />;
 
   function handleSubmit(e) {
     e.preventDefault();
     const p = protocolo.trim().toLowerCase();
     const em = email.trim().toLowerCase();
     if (!p || !em) return;
-    const found = tickets.find(t => t.id.toLowerCase() === p && t.email.toLowerCase() === em);
+    const foundTicket = tickets.find(t => t.id.toLowerCase() === p && t.email.toLowerCase() === em);
+    const foundReq = requisicoes.find(r => r.id.toLowerCase() === p && r.email.toLowerCase() === em);
+    const found = foundTicket || foundReq;
     if (found) {
       setError("");
       onFound(found.id);
     } else {
-      setError("Chamado não encontrado. Confira o protocolo e o e-mail informados no momento da abertura.");
+      setError("Não encontrado. Confira o protocolo e o e-mail informados no momento da abertura.");
     }
   }
 
@@ -900,15 +910,15 @@ function AcompanharBusca({ tickets, onFound }) {
       <div className="w-10 h-10 rounded-sm flex items-center justify-center mb-4" style={{ background: "#1B2E45" }}>
         <SearchIcon size={18} color="#F2A93B" />
       </div>
-      <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: "'Oswald', sans-serif", color: "#fff" }}>Acompanhar chamado</h2>
+      <h2 className="text-xl font-semibold mb-1" style={{ fontFamily: "'Oswald', sans-serif", color: "#fff" }}>Acompanhar chamado ou requisição</h2>
       <p className="text-sm mb-6" style={{ color: "#9FB0C4" }}>
-        Por segurança, você só acessa um chamado informando o protocolo e o mesmo e-mail usados na abertura.
+        Por segurança, você só acessa informando o protocolo e o mesmo e-mail usados na abertura.
       </p>
       <form onSubmit={handleSubmit}>
         <Field label="Protocolo" className="mb-4">
           <input value={protocolo} onChange={e => setProtocolo(e.target.value)}
             className="w-full px-3 py-2 rounded-sm border text-sm" style={{ background: "#0F1E30", borderColor: "#2C4A6B", color: "#fff" }}
-            placeholder="CH-2026-0001" />
+            placeholder="CH-2026-0001 ou REQ-2026-0001" />
         </Field>
         <Field label="E-mail usado na abertura" className="mb-4">
           <input type="email" value={email} onChange={e => setEmail(e.target.value)}
@@ -917,9 +927,49 @@ function AcompanharBusca({ tickets, onFound }) {
         </Field>
         {error && <p className="text-xs mb-3" style={{ color: "#E38B6B" }}>{error}</p>}
         <button type="submit" className="w-full py-2.5 rounded-sm text-sm font-semibold" style={{ background: "#F2A93B", color: "#1F2937" }}>
-          Ver chamado
+          Ver status
         </button>
       </form>
+    </div>
+  );
+}
+
+function RequisicaoStatusView({ requisicao, onBack }) {
+  const items = reqItemsList(requisicao);
+  const doneCount = items.filter(it => requisicao.entregues?.[it.name]).length;
+  const allDone = items.length > 0 && doneCount === items.length;
+  const statusKey = allDone ? "entregue" : "pendente";
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <button type="button" onClick={onBack} className="flex items-center gap-1 text-xs font-medium mb-4" style={{ color: "#9FB0C4" }}>
+        <ChevronLeft size={14} /> voltar
+      </button>
+      <div className="rounded-md border p-5" style={{ background: "#132234", borderColor: "#223751" }}>
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <p className="text-lg font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#fff" }}>{requisicao.id}</p>
+            <p className="text-xs mt-0.5" style={{ color: "#9FB0C4" }}>{requisicao.setor} · solicitado em {timeLabel(requisicao.createdAt)}</p>
+          </div>
+          <ReqStampBadge statusKey={statusKey} />
+        </div>
+        <p className="text-xs mb-4" style={{ color: "#7C8CA0" }}>{doneCount}/{items.length} itens entregues</p>
+        <div className="flex flex-col gap-2">
+          {items.map(it => {
+            const done = !!requisicao.entregues?.[it.name];
+            return (
+              <div key={it.name} className="flex items-center justify-between px-3 py-2 rounded-sm border text-xs font-medium"
+                style={{ borderColor: done ? "#6FCF97" : "#2C4A6B", background: done ? "rgba(111,207,151,0.1)" : "#0F1E30", color: done ? "#6FCF97" : "#D7DEE7" }}>
+                <span className="flex items-center gap-2">
+                  {done ? <CheckCircle2 size={14} /> : <CircleDot size={14} />}
+                  {it.name}{it.qty ? ` x${it.qty}` : ""}
+                </span>
+                <span className="text-[10px] font-semibold">{done ? "ENTREGUE" : "PENDENTE"}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
