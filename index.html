@@ -25,35 +25,52 @@
 <script type="text/babel" data-presets="react,env">
 const { useState, useEffect, useRef, useCallback } = React;
 
-// ---------- storage shim: mimics the artifact window.storage API using localStorage ----------
-// NOTE: this makes data local to THIS browser only. It does not sync between
-// different people or devices — for that you need a real backend (see chat notes).
-const STORAGE_PREFIX = "facilities-app:";
+// ---------- storage shim: mimics the artifact window.storage API, backed by a shared database ----------
+// Isso faz os dados (chamados, requisições, chat) ficarem compartilhados entre TODAS as
+// pessoas que acessam o app, em vez de ficarem isolados no navegador de cada uma.
+// Troque a URL abaixo pela função /api/storage publicada (veja storage-function/README.md).
+const STORAGE_API_URL = "https://chamados-facilities-two.vercel.app/api/storage";
+
 window.storage = {
   async get(key) {
     try {
-      const raw = localStorage.getItem(STORAGE_PREFIX + key);
-      return raw !== null ? { key, value: raw, shared: false } : null;
-    } catch { return null; }
+      const r = await fetch(`${STORAGE_API_URL}?key=${encodeURIComponent(key)}`);
+      const data = await r.json();
+      if (data.value === null || data.value === undefined) return null;
+      return { key, value: data.value, shared: true };
+    } catch (err) {
+      console.error("Falha ao ler do banco compartilhado:", err);
+      return null;
+    }
   },
   async set(key, value) {
     try {
-      localStorage.setItem(STORAGE_PREFIX + key, value);
-      return { key, value, shared: false };
-    } catch { return null; }
+      await fetch(STORAGE_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set", key, value }),
+      });
+      return { key, value, shared: true };
+    } catch (err) {
+      console.error("Falha ao salvar no banco compartilhado:", err);
+      return null;
+    }
   },
   async delete(key) {
     try {
-      localStorage.removeItem(STORAGE_PREFIX + key);
-      return { key, deleted: true, shared: false };
-    } catch { return null; }
+      await fetch(STORAGE_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", key }),
+      });
+      return { key, deleted: true, shared: true };
+    } catch (err) {
+      console.error("Falha ao apagar do banco compartilhado:", err);
+      return null;
+    }
   },
-  async list(prefix) {
-    try {
-      const p = STORAGE_PREFIX + (prefix || "");
-      const keys = Object.keys(localStorage).filter(k => k.startsWith(p)).map(k => k.slice(STORAGE_PREFIX.length));
-      return { keys };
-    } catch { return { keys: [] }; }
+  async list() {
+    return { keys: [] }; // não usado pelo app atualmente
   },
 };
 
