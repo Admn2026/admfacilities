@@ -108,6 +108,7 @@ const Archive = (p) => <Icon {...p}><rect x="2" y="3" width="20" height="5" rx="
 const Package = (p) => <Icon {...p}><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" /><path d="M12 22V12" /><polyline points="3.29 7 12 12 20.71 7" /><path d="m7.5 4.27 9 5.15" /></Icon>;
 const Paperclip = (p) => <Icon {...p}><path d="M13.234 20.252 21 12.3" /><path d="m16 6-8.414 8.586a2 2 0 0 0 0 2.828 2 2 0 0 0 2.828 0l8.414-8.586a4 4 0 0 0 0-5.656 4 4 0 0 0-5.656 0l-8.415 8.585a6 6 0 1 0 8.486 8.486" /></Icon>;
 const X = (p) => <Icon {...p}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Icon>;
+const Download = (p) => <Icon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></Icon>;
 const AlertTriangle = (p) => <Icon {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><path d="M12 9v4" /><path d="M12 17h.01" /></Icon>;
 const Minus = (p) => <Icon {...p}><path d="M5 12h14" /></Icon>;
 const Plus = (p) => <Icon {...p}><path d="M5 12h14" /><path d="M12 5v14" /></Icon>;
@@ -140,7 +141,7 @@ const EMPRESAS = ["KING OURO", "PISA"];
 
 const SETORES = [
   "COMERCIAL KING", "COMERCIAL PISA", "COMERCIAL TRIO", "COMPRAS", "CONTABILIDADE",
-  "CONTROLADORIA", "DIRETORIA", "FINANCEIRO", "FISCAL", "INTELIGENCIA",
+  "CONTROLADORIA", "DIRETORIA", "FACILITIES", "FACILITIES PISA", "FINANCEIRO", "FISCAL", "INTELIGENCIA",
   "LOGISTICA KING", "LOGÍSTICA PISA", "MARKETING", "QUALIDADE",
   "RH/DP - KING", "RH/DP - PISA", "SST KING", "SST PISA", "TI KING", "TI PISA",
 ];
@@ -329,8 +330,12 @@ function FacilitiesApp() {
 
   useEffect(() => {
     refreshTickets();
-    const id = setInterval(refreshTickets, 4000);
-    return () => clearInterval(id);
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") refreshTickets();
+    }, 25000); // consulta a cada 25s (e só quando a aba está visível) para economizar dados
+    const onVis = () => { if (document.visibilityState === "visible") refreshTickets(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
   }, [refreshTickets]);
 
   const refreshRequisicoes = useCallback(async () => {
@@ -340,27 +345,13 @@ function FacilitiesApp() {
 
   useEffect(() => {
     refreshRequisicoes();
-    const id = setInterval(refreshRequisicoes, 4000);
-    return () => clearInterval(id);
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") refreshRequisicoes();
+    }, 25000);
+    const onVis = () => { if (document.visibilityState === "visible") refreshRequisicoes(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
   }, [refreshRequisicoes]);
-
-  const refreshItemStatus = useCallback(async () => {
-    const s = await loadItemStatus();
-    setItemStatus(s);
-  }, []);
-
-  useEffect(() => {
-    refreshItemStatus();
-    const id = setInterval(refreshItemStatus, 4000);
-    return () => clearInterval(id);
-  }, [refreshItemStatus]);
-
-  async function updateItemStatus(item, statusKey) {
-    const current = await loadItemStatus();
-    const updated = { ...current, [item]: statusKey };
-    await saveItemStatus(updated);
-    await refreshItemStatus();
-  }
 
   const refreshThread = useCallback(async (id) => {
     if (!id) return;
@@ -371,8 +362,12 @@ function FacilitiesApp() {
   useEffect(() => {
     if (!selected) return;
     refreshThread(selected);
-    pollRef.current = setInterval(() => refreshThread(selected), 2500);
-    return () => clearInterval(pollRef.current);
+    pollRef.current = setInterval(() => {
+      if (document.visibilityState === "visible") refreshThread(selected);
+    }, 8000); // chat consultado a cada 8s (era 2,5s) — ainda responsivo, bem mais econômico
+    const onVis = () => { if (document.visibilityState === "visible") refreshThread(selected); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(pollRef.current); document.removeEventListener("visibilitychange", onVis); };
   }, [selected, refreshThread]);
 
   async function pushNotification(id, entries) {
@@ -524,7 +519,7 @@ function FacilitiesApp() {
                 ? <PainelLogin onSuccess={() => setPainelAuth(true)} />
                 : selectedTicket
                   ? <TicketDetail ticket={selectedTicket} thread={thread} viewer="facilities" onBack={() => setSelected(null)} onSend={(text) => sendChat(selectedTicket.id, "facilities", text)} onStatusChange={(s) => updateStatus(selectedTicket.id, s)} />
-                  : <PainelEquipe tickets={tickets} requisicoes={requisicoes} itemStatus={itemStatus} onOpen={(id) => setSelected(id)} onUpdateRequisicao={updateRequisicaoStatus} onUpdateItemStatus={updateItemStatus} onToggleReqItem={updateRequisicaoItemEntregue} />
+                  : <PainelEquipe tickets={tickets} requisicoes={requisicoes} itemStatus={itemStatus} onOpen={(id) => setSelected(id)} onUpdateRequisicao={updateRequisicaoStatus} onToggleReqItem={updateRequisicaoItemEntregue} />
             )}
           </main>
         </div>
@@ -1112,7 +1107,9 @@ function RequisicaoCard({ r, onToggleItem }) {
     <div className="rounded-md border overflow-hidden" style={{ background: "#132234", borderColor: "#223751" }}>
       <button type="button" onClick={() => setOpen(o => !o)} className="w-full text-left p-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#fff" }}>{r.id}</p>
+          <p className="text-sm font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#fff" }}>
+            {r.id} <span className="font-normal" style={{ color: "#7C8CA0" }}>· aberta em {timeLabel(r.createdAt)}</span>
+          </p>
           <p className="text-xs mt-0.5" style={{ color: "#9FB0C4" }}>{r.nome} · {r.setor} · {r.email}</p>
           <p className="text-xs mt-2" style={{ color: "#D7DEE7" }}>{itemsSummary(r)}</p>
           <p className="text-[11px] mt-1 font-medium" style={{ color: "#7C8CA0" }}>{doneCount}/{items.length} itens entregues</p>
@@ -1144,11 +1141,202 @@ function RequisicaoCard({ r, onToggleItem }) {
   );
 }
 
+const MESES_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+
+function monthKeyLabel(iso) {
+  const d = new Date(iso);
+  return { key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, label: `${MESES_PT[d.getMonth()]}/${d.getFullYear()}` };
+}
+
+function downloadCsv(filename, rows) {
+  const csv = rows.map(row => row.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportRequisicoesCsv(requisicoes) {
+  const header = ["Protocolo", "Nome", "Email", "Setor", "Data de abertura", "Itens", "Outros", "Status"];
+  const rows = requisicoes.map(r => [
+    r.id, r.nome, r.email, r.setor, timeLabel(r.createdAt),
+    Object.entries(r.itens || {}).filter(([, q]) => q > 0).map(([k, q]) => `${k} x${q}`).join("; "),
+    r.outros || "",
+    r.status,
+  ]);
+  downloadCsv(`requisicoes-${Date.now()}.csv`, [header, ...rows]);
+}
+
+function exportRankingCsv(topItems, topPeople, selectedItem) {
+  const rows = [
+    ["Itens mais solicitados"],
+    ["Item", "Quantidade total"],
+    ...topItems.map(it => [it.name, it.qty]),
+    [],
+    [selectedItem ? `Quem mais pede ${selectedItem}` : "Quem mais solicita"],
+    ["Nome", "Setor", "Total"],
+    ...topPeople.map(p => [p.nome, p.setor, p.total]),
+  ];
+  downloadCsv(`ranking-materiais-${Date.now()}.csv`, rows);
+}
+
+function DashboardMateriais({ requisicoes }) {
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedPerson, setSelectedPerson] = useState(null);
+
+  const itemTotals = {};
+  requisicoes.forEach(r => {
+    Object.entries(r.itens || {}).forEach(([name, qty]) => {
+      if (qty > 0) itemTotals[name] = (itemTotals[name] || 0) + qty;
+    });
+  });
+  const topItems = Object.entries(itemTotals)
+    .map(([name, qty]) => ({ name, qty }))
+    .sort((a, b) => b.qty - a.qty)
+    .slice(0, 8);
+  const maxItemQty = Math.max(1, ...topItems.map(i => i.qty));
+
+  const personTotals = {};
+  requisicoes.forEach(r => {
+    const qty = selectedItem ? (r.itens?.[selectedItem] || 0) : Object.values(r.itens || {}).reduce((sum, q) => sum + (q > 0 ? q : 0), 0);
+    if (qty <= 0) return;
+    const key = r.email;
+    if (!personTotals[key]) personTotals[key] = { nome: r.nome, setor: r.setor, email: r.email, total: 0 };
+    personTotals[key].total += qty;
+  });
+  const topPeople = Object.values(personTotals).sort((a, b) => b.total - a.total).slice(0, 8);
+
+  // monthly breakdown: só faz sentido com um item selecionado + uma pessoa selecionada
+  let monthly = [];
+  if (selectedItem && selectedPerson) {
+    const byMonth = {};
+    requisicoes.forEach(r => {
+      if (r.email !== selectedPerson) return;
+      const qty = r.itens?.[selectedItem] || 0;
+      if (qty <= 0) return;
+      const { key, label } = monthKeyLabel(r.createdAt);
+      if (!byMonth[key]) byMonth[key] = { key, label, count: 0 };
+      byMonth[key].count += 1;
+    });
+    monthly = Object.values(byMonth).sort((a, b) => a.key.localeCompare(b.key));
+  }
+
+  if (requisicoes.length === 0) {
+    return <EmptyState icon={Inbox} title="Nenhuma requisição ainda" body="Assim que houver pedidos, os itens e solicitantes mais frequentes aparecem aqui." />;
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        <button type="button" onClick={() => exportRequisicoesCsv(requisicoes)}
+          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-sm border" style={{ borderColor: "#2C4A6B", color: "#9FB0C4" }}>
+          <Download size={13} /> Exportar requisições (CSV)
+        </button>
+        <button type="button" onClick={() => exportRankingCsv(topItems, topPeople, selectedItem)}
+          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-sm border" style={{ borderColor: "#2C4A6B", color: "#9FB0C4" }}>
+          <Download size={13} /> Exportar ranking (CSV)
+        </button>
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-5">
+        <div className="rounded-md border p-5" style={{ background: "#132234", borderColor: "#223751" }}>
+          <p className="text-[11px] font-semibold mb-1" style={{ color: "#F2A93B", letterSpacing: "0.08em" }}>ITENS MAIS SOLICITADOS</p>
+          <p className="text-xs mb-4" style={{ color: "#7C8CA0" }}>Clique num item para ver quem mais pede ele</p>
+          <div className="flex flex-col gap-3">
+            {topItems.map(it => {
+              const barWidth = Math.max(4, Math.round((it.qty / maxItemQty) * 100));
+              const active = selectedItem === it.name;
+              return (
+                <button type="button" key={it.name} onClick={() => { setSelectedItem(active ? null : it.name); setSelectedPerson(null); }}
+                  className="text-left rounded-sm -mx-1 px-1 py-0.5" style={{ background: active ? "rgba(242,169,59,0.08)" : "transparent" }}>
+                  <div className="flex items-center justify-between text-xs mb-1" style={{ color: active ? "#F2A93B" : "#D7DEE7" }}>
+                    <span className="font-medium">{it.name}</span>
+                    <span className="font-semibold" style={{ color: active ? "#F2A93B" : "#fff" }}>{it.qty}</span>
+                  </div>
+                  <div className="rounded-sm" style={{ background: "#0F1E30", height: 6 }}>
+                    <div className="rounded-sm" style={{ background: "#F2A93B", height: 6, width: `${barWidth}%` }} />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-md border p-5" style={{ background: "#132234", borderColor: "#223751" }}>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-[11px] font-semibold" style={{ color: "#F2A93B", letterSpacing: "0.08em" }}>
+              {selectedItem ? `QUEM MAIS PEDE ${selectedItem.toUpperCase()}` : "QUEM MAIS SOLICITA"}
+            </p>
+            {selectedItem && (
+              <button type="button" onClick={() => { setSelectedItem(null); setSelectedPerson(null); }} className="text-[10px] font-semibold" style={{ color: "#7C8CA0" }}>
+                limpar
+              </button>
+            )}
+          </div>
+          <p className="text-xs mb-4" style={{ color: "#7C8CA0" }}>
+            {selectedItem ? `Quantidade de ${selectedItem} solicitada por pessoa · clique numa pessoa para ver por mês` : "Total de itens pedidos por pessoa"}
+          </p>
+          {topPeople.length === 0 ? (
+            <p className="text-xs" style={{ color: "#5B6B80" }}>Ninguém pediu esse item ainda.</p>
+          ) : (
+            <div className="flex flex-col">
+              {topPeople.map((p, i) => {
+                const isOpen = selectedItem && selectedPerson === p.email;
+                return (
+                  <div key={p.email} style={{ borderBottom: i < topPeople.length - 1 ? "1px solid #1B2E45" : "none" }}>
+                    <button type="button"
+                      onClick={() => selectedItem && setSelectedPerson(isOpen ? null : p.email)}
+                      className="w-full flex items-center justify-between py-2 text-left">
+                      <div>
+                        <p className="text-xs font-semibold" style={{ color: "#fff" }}>{p.nome}</p>
+                        <p className="text-[10px]" style={{ color: "#7C8CA0" }}>{p.setor}</p>
+                      </div>
+                      <span className="font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#F2A93B", fontSize: 14 }}>{p.total}</span>
+                    </button>
+                    {isOpen && (
+                      <div className="pb-3 pl-1">
+                        {monthly.length === 0 ? (
+                          <p className="text-[11px]" style={{ color: "#5B6B80" }}>Sem dados por mês.</p>
+                        ) : (
+                          <div className="flex flex-col gap-1.5">
+                            {monthly.map(m => (
+                              <div key={m.key} className="flex items-center justify-between text-[11px]">
+                                <span style={{ color: "#9FB0C4" }}>{m.label}</span>
+                                <span style={{ color: "#F2A93B", fontWeight: 600 }}>{m.count}x</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashboardEmpresa({ empresa, tickets }) {
   const ticketsEmpresa = tickets.filter(t => t.empresa === empresa);
   const total = ticketsEmpresa.length;
-  const counts = CATEGORIAS
-    .map(c => ({ id: c.id, label: c.label, count: ticketsEmpresa.filter(t => t.categoria === c.id).length }))
+
+  const bucket = {};
+  ticketsEmpresa.forEach(t => {
+    const catLabel = catInfo(t.categoria).label;
+    const label = t.subcategoria ? `${catLabel} · ${t.subcategoria}` : catLabel;
+    bucket[label] = (bucket[label] || 0) + 1;
+  });
+  const counts = Object.entries(bucket)
+    .map(([label, count]) => ({ label, count }))
     .sort((a, b) => b.count - a.count);
   const maxCount = Math.max(1, ...counts.map(c => c.count));
 
@@ -1164,7 +1352,7 @@ function DashboardEmpresa({ empresa, tickets }) {
             const pct = Math.round((c.count / total) * 100);
             const barWidth = c.count > 0 ? Math.max(4, Math.round((c.count / maxCount) * 100)) : 2;
             return (
-              <div key={c.id}>
+              <div key={c.label}>
                 <div className="flex items-center justify-between text-xs mb-1" style={{ color: "#D7DEE7" }}>
                   <span>{c.label}</span>
                   <span className="font-semibold" style={{ color: "#fff" }}>
@@ -1214,10 +1402,16 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
 
       {view === "dashboard" && (
         tickets === null ? <EmptyState icon={Clock} title="Carregando..." body="Buscando chamados." /> :
-        <div className="grid sm:grid-cols-2 gap-5">
-          {EMPRESAS.map(emp => (
-            <DashboardEmpresa key={emp} empresa={emp} tickets={tickets} />
-          ))}
+        <div>
+          <div className="grid sm:grid-cols-2 gap-5 mb-8">
+            {EMPRESAS.map(emp => (
+              <DashboardEmpresa key={emp} empresa={emp} tickets={tickets} />
+            ))}
+          </div>
+          <p className="text-[11px] font-semibold mb-3" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>MATERIAIS MAIS SOLICITADOS</p>
+          {requisicoes === null
+            ? <EmptyState icon={Clock} title="Carregando..." body="Buscando requisições." />
+            : <DashboardMateriais requisicoes={requisicoes} />}
         </div>
       )}
 
