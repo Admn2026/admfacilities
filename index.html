@@ -20,7 +20,7 @@
 <div id="root"></div>
 
 <script type="text/babel" data-presets="react,env">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 // ---------- storage shim: mimics the artifact window.storage API, backed by a shared database ----------
 // Isso faz os dados (chamados, requisições, chat) ficarem compartilhados entre TODAS as
@@ -179,6 +179,9 @@ const ADMIN_PASSWORD = "Adm@2026";
 // pela URL real que a Vercel te der, terminando em "/api/send-email".
 const EMAIL_API_URL = "https://chamados-facilities-two.vercel.app/api/send-email";
 
+// URL pública do site (usada para montar o link "Acompanhar chamado" dentro dos e-mails)
+const APP_BASE_URL = "https://admfacilities.vercel.app";
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -189,6 +192,7 @@ function escapeHtml(str) {
 function buildEmailHtml(subject, body) {
   const protocolMatch = subject.match(/[A-Z]+-\d{4}-\d{4}/);
   const protocol = protocolMatch ? protocolMatch[0] : null;
+  const trackUrl = protocol ? `${APP_BASE_URL}/?protocolo=${encodeURIComponent(protocol)}` : null;
   return `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F2EC;padding:24px 0;font-family:Arial,Helvetica,sans-serif;">
   <tr>
@@ -203,7 +207,11 @@ function buildEmailHtml(subject, body) {
           <td style="padding:28px 24px 8px;">
             <h1 style="margin:0 0 14px;font-size:19px;color:#1F2937;font-family:Arial,Helvetica,sans-serif;">${escapeHtml(subject)}</h1>
             <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#374151;">${escapeHtml(body)}</p>
-            ${protocol ? `<div style="display:inline-block;background:#FBF0DE;border:1px solid #F2A93B;border-radius:6px;padding:8px 14px;font-family:'Courier New',monospace;font-weight:bold;color:#C97A1F;font-size:15px;">${protocol}</div>` : ""}
+            ${protocol ? `
+            <a href="${trackUrl}" style="display:inline-block;background:#FBF0DE;border:1px solid #F2A93B;border-radius:6px;padding:8px 14px;font-family:'Courier New',monospace;font-weight:bold;color:#C97A1F;font-size:15px;text-decoration:none;">${protocol}</a>
+            <div style="margin-top:16px;">
+              <a href="${trackUrl}" style="display:inline-block;background:#1F3A5F;color:#ffffff;border-radius:6px;padding:11px 22px;font-family:Arial,Helvetica,sans-serif;font-weight:bold;font-size:13px;text-decoration:none;">Acompanhar chamado →</a>
+            </div>` : ""}
           </td>
         </tr>
         <tr>
@@ -336,7 +344,14 @@ function EmptyState({ icon: IconComp, title, body }) {
 }
 
 function FacilitiesApp() {
-  const [tab, setTab] = useState("home");
+  const initialProtocolo = useMemo(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("protocolo") || "";
+    } catch {
+      return "";
+    }
+  }, []);
+  const [tab, setTab] = useState(initialProtocolo ? "acompanhar" : "home");
   const [tickets, setTickets] = useState(null);
   const [requisicoes, setRequisicoes] = useState(null);
   const [itemStatus, setItemStatus] = useState({});
@@ -346,6 +361,12 @@ function FacilitiesApp() {
   const pollRef = useRef(null);
   const ticketsRevRef = useRef(null);
   const requisicoesRevRef = useRef(null);
+
+  useEffect(() => {
+    if (initialProtocolo) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [initialProtocolo]);
   const threadRevRef = useRef({ id: null, rev: null });
 
   const refreshTickets = useCallback(async (force = false) => {
@@ -548,7 +569,7 @@ function FacilitiesApp() {
                 ? <TicketDetail ticket={selectedTicket} thread={thread} viewer="usuario" onBack={() => setSelected(null)} onSend={(text) => sendChat(selectedTicket.id, "usuario", text)} />
                 : selectedRequisicao
                   ? <RequisicaoStatusView requisicao={selectedRequisicao} onBack={() => setSelected(null)} />
-                  : <AcompanharBusca tickets={tickets} requisicoes={requisicoes} onFound={(id) => setSelected(id)} />
+                  : <AcompanharBusca tickets={tickets} requisicoes={requisicoes} onFound={(id) => setSelected(id)} initialProtocolo={initialProtocolo} />
             )}
             {tab === "painel" && (
               !painelAuth
@@ -951,8 +972,8 @@ function QtyRow({ label, value, onChange, emFalta }) {
   );
 }
 
-function AcompanharBusca({ tickets, requisicoes, onFound }) {
-  const [protocolo, setProtocolo] = useState("");
+function AcompanharBusca({ tickets, requisicoes, onFound, initialProtocolo }) {
+  const [protocolo, setProtocolo] = useState(initialProtocolo || "");
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
 
