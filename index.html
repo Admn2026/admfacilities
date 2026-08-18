@@ -231,6 +231,16 @@ async function sendRealEmail(to, subject, body) {
 }
 
 // ---------- storage helpers ----------
+async function loadRev(key) {
+  try {
+    const r = await window.storage.get(key);
+    return r ? r.value : null;
+  } catch { return null; }
+}
+async function bumpRev(key) {
+  try { await window.storage.set(key, String(Date.now())); } catch {}
+}
+
 async function loadTickets() {
   try {
     const r = await window.storage.get("tickets");
@@ -239,6 +249,7 @@ async function loadTickets() {
 }
 async function saveTickets(tickets) {
   try { await window.storage.set("tickets", JSON.stringify(tickets)); } catch {}
+  await bumpRev("tickets_rev");
 }
 async function loadThread(id) {
   try {
@@ -248,6 +259,16 @@ async function loadThread(id) {
 }
 async function saveThread(id, thread) {
   try { await window.storage.set(`thread:${id}`, JSON.stringify(thread)); } catch {}
+  await bumpRev(`thread_rev:${id}`);
+}
+async function loadAnexo(ticketId) {
+  try {
+    const r = await window.storage.get(`anexo:${ticketId}`);
+    return r ? JSON.parse(r.value) : null;
+  } catch { return null; }
+}
+async function saveAnexo(ticketId, anexo) {
+  try { await window.storage.set(`anexo:${ticketId}`, JSON.stringify(anexo)); } catch {}
 }
 async function loadRequisicoes() {
   try {
@@ -257,6 +278,7 @@ async function loadRequisicoes() {
 }
 async function saveRequisicoes(list) {
   try { await window.storage.set("requisicoes", JSON.stringify(list)); } catch {}
+  await bumpRev("requisicoes_rev");
 }
 async function loadItemStatus() {
   try {
@@ -322,49 +344,65 @@ function FacilitiesApp() {
   const [thread, setThread] = useState({ chat: [], notif: [] });
   const [painelAuth, setPainelAuth] = useState(false);
   const pollRef = useRef(null);
+  const ticketsRevRef = useRef(null);
+  const requisicoesRevRef = useRef(null);
+  const threadRevRef = useRef({ id: null, rev: null });
 
-  const refreshTickets = useCallback(async () => {
+  const refreshTickets = useCallback(async (force = false) => {
+    const rev = await loadRev("tickets_rev");
+    if (!force && rev !== null && rev === ticketsRevRef.current) return; // nada mudou, não baixa a lista inteira
+    ticketsRevRef.current = rev;
     const t = await loadTickets();
     setTickets(t);
   }, []);
 
   useEffect(() => {
-    refreshTickets();
+    const needsTickets = tab === "acompanhar" || tab === "painel";
+    if (!needsTickets) return;
+    refreshTickets(true);
     const id = setInterval(() => {
       if (document.visibilityState === "visible") refreshTickets();
-    }, 25000); // consulta a cada 25s (e só quando a aba está visível) para economizar dados
+    }, 20000); // checagem leve a cada 20s — só baixa os dados completos quando algo realmente muda
     const onVis = () => { if (document.visibilityState === "visible") refreshTickets(); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
-  }, [refreshTickets]);
+  }, [refreshTickets, tab]);
 
-  const refreshRequisicoes = useCallback(async () => {
+  const refreshRequisicoes = useCallback(async (force = false) => {
+    const rev = await loadRev("requisicoes_rev");
+    if (!force && rev !== null && rev === requisicoesRevRef.current) return;
+    requisicoesRevRef.current = rev;
     const r = await loadRequisicoes();
     setRequisicoes(r);
   }, []);
 
   useEffect(() => {
-    refreshRequisicoes();
+    const needsRequisicoes = tab === "acompanhar" || tab === "painel";
+    if (!needsRequisicoes) return;
+    refreshRequisicoes(true);
     const id = setInterval(() => {
       if (document.visibilityState === "visible") refreshRequisicoes();
-    }, 25000);
+    }, 20000);
     const onVis = () => { if (document.visibilityState === "visible") refreshRequisicoes(); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
-  }, [refreshRequisicoes]);
+  }, [refreshRequisicoes, tab]);
 
-  const refreshThread = useCallback(async (id) => {
+  const refreshThread = useCallback(async (id, force = false) => {
     if (!id) return;
+    const rev = await loadRev(`thread_rev:${id}`);
+    if (!force && threadRevRef.current.id === id && rev !== null && rev === threadRevRef.current.rev) return;
+    threadRevRef.current = { id, rev };
     const th = await loadThread(id);
     setThread(th);
   }, []);
 
   useEffect(() => {
     if (!selected) return;
-    refreshThread(selected);
+    refreshThread(selected, true);
     pollRef.current = setInterval(() => {
       if (document.visibilityState === "visible") refreshThread(selected);
-    }, 8000); // chat consultado a cada 8s (era 2,5s) — ainda responsivo, bem mais econômico
+    }, 8000); // checagem leve a cada 8s — o chat parece ágil sem baixar a conversa inteira toda hora
     const onVis = () => { if (document.visibilityState === "visible") refreshThread(selected); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(pollRef.current); document.removeEventListener("visibilitychange", onVis); };
@@ -377,30 +415,27 @@ function FacilitiesApp() {
     entries.forEach(e => sendRealEmail(e.to, e.subject, e.body));
   }
 
-  async function nextProtocolSeq() {
-    const [allTickets, allReq] = await Promise.all([loadTickets(), loadRequisicoes()]);
-    return allTickets.length + allReq.length + 1;
-  }
-
   async function createTicket(form) {
-    const current = tickets || [];
-    const num = await nextProtocolSeq();
+    const [allTickets, allReq] = await Promise.all([loadTickets(), loadRequisicoes()]);
+    const num = allTickets.length + allReq.length + 1;
     const protocol = protocolFor("CH", num);
     const now = new Date().toISOString();
-    const ticket = { id: protocol, ...form, status: "aberto", createdAt: now, updatedAt: now };
-    const updated = [ticket, ...current];
+    const { anexo, ...formRest } = form;
+    const ticket = { id: protocol, ...formRest, hasAnexo: !!anexo, status: "aberto", createdAt: now, updatedAt: now };
+    const updated = [ticket, ...allTickets];
     await saveTickets(updated);
+    if (anexo) await saveAnexo(protocol, anexo);
     await saveThread(protocol, { chat: [], notif: [] });
     await pushNotification(protocol, [
       { to: form.email, subject: `Chamado ${protocol} aberto com sucesso`, body: `Recebemos sua solicitação (${catInfo(form.categoria).label}). Você será notificado por e-mail a cada atualização.`, time: now },
       { to: FACILITIES_EMAIL, subject: `Novo chamado ${protocol} — ${catInfo(form.categoria).label}`, body: `Aberto por ${form.nome} (${form.email}) — ${form.setor} — em ${form.local} — ${form.empresa}. Categoria: ${catInfo(form.categoria).label}${form.subcategoria ? " - " + form.subcategoria : ""}.`, time: now },
     ]);
-    await refreshTickets();
+    await refreshTickets(true);
     return protocol;
   }
 
   async function updateStatus(id, statusKey) {
-    const current = tickets || [];
+    const current = await loadTickets();
     const updated = current.map(t => t.id === id ? { ...t, status: statusKey, updatedAt: new Date().toISOString() } : t);
     await saveTickets(updated);
     const t = updated.find(x => x.id === id);
@@ -409,18 +444,18 @@ function FacilitiesApp() {
       { to: t.email, subject: `Chamado ${id} — status atualizado para ${STATUS[statusKey].label}`, body: `A equipe de facilities atualizou o status do seu chamado.`, time: now },
       { to: FACILITIES_EMAIL, subject: `Chamado ${id} atualizado`, body: `Status alterado para ${STATUS[statusKey].label}.`, time: now },
     ]);
-    await refreshTickets();
+    await refreshTickets(true);
   }
 
   async function createRequisicao(form) {
-    const current = requisicoes || [];
-    const num = await nextProtocolSeq();
+    const [allTickets, allReq] = await Promise.all([loadTickets(), loadRequisicoes()]);
+    const num = allTickets.length + allReq.length + 1;
     const protocol = protocolFor("REQ", num);
     const now = new Date().toISOString();
     const requisicao = { id: protocol, nome: form.nome, email: form.email, setor: form.setor, itens: form.itens, outros: form.outros, entregues: {}, status: "pendente", createdAt: now, updatedAt: now };
-    const updated = [requisicao, ...current];
+    const updated = [requisicao, ...allReq];
     await saveRequisicoes(updated);
-    await refreshRequisicoes();
+    await refreshRequisicoes(true);
 
     const itemsText = itemsSummary(requisicao);
     sendRealEmail(form.email, `Requisição ${protocol} registrada`, `Recebemos sua requisição de materiais (${itemsText}). Você será notificado quando ela for entregue.`);
@@ -430,14 +465,14 @@ function FacilitiesApp() {
   }
 
   async function updateRequisicaoStatus(id, statusKey) {
-    const current = requisicoes || [];
+    const current = await loadRequisicoes();
     const updated = current.map(r => r.id === id ? { ...r, status: statusKey, updatedAt: new Date().toISOString() } : r);
     await saveRequisicoes(updated);
-    await refreshRequisicoes();
+    await refreshRequisicoes(true);
   }
 
   async function updateRequisicaoItemEntregue(id, itemName) {
-    const current = requisicoes || [];
+    const current = await loadRequisicoes();
     let justCompleted = null;
     const updated = current.map(r => {
       if (r.id !== id) return r;
@@ -450,7 +485,7 @@ function FacilitiesApp() {
       return updatedReq;
     });
     await saveRequisicoes(updated);
-    await refreshRequisicoes();
+    await refreshRequisicoes(true);
     if (justCompleted) {
       sendRealEmail(justCompleted.email, `Requisição ${justCompleted.id} entregue`, `Sua requisição de materiais (${itemsSummary(justCompleted)}) foi totalmente entregue.`);
     }
@@ -462,12 +497,13 @@ function FacilitiesApp() {
     const msg = { sender, text: text.trim(), time: new Date().toISOString() };
     th.chat = [...th.chat, msg];
     await saveThread(id, th);
-    const t = (tickets || []).find(x => x.id === id);
+    const allTickets = await loadTickets();
+    const t = allTickets.find(x => x.id === id);
     if (t) {
       const notifyTarget = sender === "usuario" ? FACILITIES_EMAIL : t.email;
       await pushNotification(id, [{ to: notifyTarget, subject: `Nova mensagem no chamado ${id}`, body: text.trim(), time: msg.time }]);
     }
-    await refreshThread(id);
+    await refreshThread(id, true);
   }
 
   const selectedTicket = (tickets || []).find(t => t.id === selected) || null;
@@ -1505,10 +1541,19 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
 function TicketDetail({ ticket, thread, viewer, onBack, onSend, onStatusChange }) {
   const [msg, setMsg] = useState("");
   const [showNotif, setShowNotif] = useState(false);
+  const [anexo, setAnexo] = useState(null);
   const TIcon = catInfo(ticket.categoria).icon;
   const bottomRef = useRef(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [thread.chat]);
+
+  useEffect(() => {
+    if (ticket.hasAnexo) {
+      loadAnexo(ticket.id).then(setAnexo);
+    } else {
+      setAnexo(null);
+    }
+  }, [ticket.id, ticket.hasAnexo]);
 
   function handleSend(e) {
     e.preventDefault();
@@ -1536,17 +1581,20 @@ function TicketDetail({ ticket, thread, viewer, onBack, onSend, onStatusChange }
           {catInfo(ticket.categoria).label}{ticket.subcategoria ? ` · ${ticket.subcategoria}` : ""}
         </p>
         <p className="text-sm mb-3" style={{ color: "#D7DEE7" }}>{ticket.descricao}</p>
-        {ticket.anexo && (
+        {ticket.hasAnexo && !anexo && (
+          <p className="text-xs mb-3" style={{ color: "#7C8CA0" }}>Carregando anexo...</p>
+        )}
+        {anexo && (
           <div className="mb-3">
-            {ticket.anexo.type?.startsWith("image/") ? (
-              <a href={ticket.anexo.dataUrl} target="_blank" rel="noreferrer">
-                <img src={ticket.anexo.dataUrl} alt={ticket.anexo.name} className="rounded-sm border max-h-48 w-auto" style={{ borderColor: "#223751" }} />
+            {anexo.type?.startsWith("image/") ? (
+              <a href={anexo.dataUrl} target="_blank" rel="noreferrer">
+                <img src={anexo.dataUrl} alt={anexo.name} className="rounded-sm border max-h-48 w-auto" style={{ borderColor: "#223751" }} />
               </a>
             ) : (
-              <a href={ticket.anexo.dataUrl} download={ticket.anexo.name}
+              <a href={anexo.dataUrl} download={anexo.name}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm border text-xs font-medium"
                 style={{ borderColor: "#2C4A6B", color: "#9FB0C4" }}>
-                <Paperclip size={12} /> {ticket.anexo.name}
+                <Paperclip size={12} /> {anexo.name}
               </a>
             )}
           </div>
