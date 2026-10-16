@@ -182,6 +182,11 @@ const EMAIL_API_URL = "https://chamados-facilities-two.vercel.app/api/send-email
 // URL pública do site (usada para montar o link "Acompanhar chamado" dentro dos e-mails)
 const APP_BASE_URL = "https://admfacilities.vercel.app";
 
+// Intervalos de verificação (em milissegundos). Quanto maior, menos requisições ao servidor
+// (economiza o limite do plano gratuito da Vercel). Ajuste aqui se quiser mudar.
+const POLL_LISTAS_MS = 120000; // chamados e requisições: a cada 2 minutos
+const POLL_CHAT_MS = 30000;    // chat do chamado aberto: a cada 30 segundos
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -383,7 +388,7 @@ function FacilitiesApp() {
     refreshTickets(true);
     const id = setInterval(() => {
       if (document.visibilityState === "visible") refreshTickets();
-    }, 20000); // checagem leve a cada 20s — só baixa os dados completos quando algo realmente muda
+    }, POLL_LISTAS_MS); // checagem leve — só baixa os dados completos quando algo realmente muda
     const onVis = () => { if (document.visibilityState === "visible") refreshTickets(); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
@@ -403,7 +408,7 @@ function FacilitiesApp() {
     refreshRequisicoes(true);
     const id = setInterval(() => {
       if (document.visibilityState === "visible") refreshRequisicoes();
-    }, 20000);
+    }, POLL_LISTAS_MS);
     const onVis = () => { if (document.visibilityState === "visible") refreshRequisicoes(); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
@@ -423,7 +428,7 @@ function FacilitiesApp() {
     refreshThread(selected, true);
     pollRef.current = setInterval(() => {
       if (document.visibilityState === "visible") refreshThread(selected);
-    }, 8000); // checagem leve a cada 8s — o chat parece ágil sem baixar a conversa inteira toda hora
+    }, POLL_CHAT_MS); // checagem leve — só baixa a conversa quando chega mensagem nova
     const onVis = () => { if (document.visibilityState === "visible") refreshThread(selected); };
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(pollRef.current); document.removeEventListener("visibilitychange", onVis); };
@@ -462,7 +467,7 @@ function FacilitiesApp() {
     const t = updated.find(x => x.id === id);
     const now = new Date().toISOString();
     await pushNotification(id, [
-      { to: t.email, subject: `Chamado ${id} — status atualizado para ${STATUS[statusKey].label}`, body: `A equipe de facilities atualizou o status do seu chamado.`, time: now },
+      { to: t.email, subject: `Chamado ${id} — status atualizado para ${STATUS[statusKey].label}`, body: statusKey === "resolvido" ? `A equipe de facilities marcou o seu chamado como resolvido e o chat foi encerrado. Se precisar de algo mais, abra um novo chamado.` : `A equipe de facilities atualizou o status do seu chamado.`, time: now },
       { to: FACILITIES_EMAIL, subject: `Chamado ${id} atualizado`, body: `Status alterado para ${STATUS[statusKey].label}.`, time: now },
     ]);
     await refreshTickets(true);
@@ -473,14 +478,14 @@ function FacilitiesApp() {
     const num = allTickets.length + allReq.length + 1;
     const protocol = protocolFor("REQ", num);
     const now = new Date().toISOString();
-    const requisicao = { id: protocol, nome: form.nome, email: form.email, setor: form.setor, itens: form.itens, outros: form.outros, entregues: {}, status: "pendente", createdAt: now, updatedAt: now };
+    const requisicao = { id: protocol, nome: form.nome, email: form.email, empresa: form.empresa, setor: form.setor, itens: form.itens, outros: form.outros, entregues: {}, status: "pendente", createdAt: now, updatedAt: now };
     const updated = [requisicao, ...allReq];
     await saveRequisicoes(updated);
     await refreshRequisicoes(true);
 
     const itemsText = itemsSummary(requisicao);
     sendRealEmail(form.email, `Requisição ${protocol} registrada`, `Recebemos sua requisição de materiais (${itemsText}). Você será notificado quando ela for entregue.`);
-    sendRealEmail(FACILITIES_EMAIL, `Nova requisição ${protocol} — ${form.setor}`, `Aberta por ${form.nome} (${form.email}) — ${form.setor}. Itens: ${itemsText}.`);
+    sendRealEmail(FACILITIES_EMAIL, `Nova requisição ${protocol} — ${form.setor}`, `Aberta por ${form.nome} (${form.email}) — ${form.empresa} — ${form.setor}. Itens: ${itemsText}.`);
 
     return protocol;
   }
@@ -514,12 +519,13 @@ function FacilitiesApp() {
 
   async function sendChat(id, sender, text) {
     if (!text.trim()) return;
+    const allTickets = await loadTickets();
+    const t = allTickets.find(x => x.id === id);
+    if (t && t.status === "resolvido") { await refreshTickets(true); return; } // chat encerrado
     const th = await loadThread(id);
     const msg = { sender, text: text.trim(), time: new Date().toISOString() };
     th.chat = [...th.chat, msg];
     await saveThread(id, th);
-    const allTickets = await loadTickets();
-    const t = allTickets.find(x => x.id === id);
     if (t) {
       const notifyTarget = sender === "usuario" ? FACILITIES_EMAIL : t.email;
       await pushNotification(id, [{ to: notifyTarget, subject: `Nova mensagem no chamado ${id}`, body: text.trim(), time: msg.time }]);
@@ -856,6 +862,7 @@ function RequisicaoForm({ onSubmit, itemStatus }) {
   const emptyItens = Object.fromEntries([...MATERIAL_ESCRITORIO, ...INSUMOS].map(i => [i, 0]));
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
+  const [empresa, setEmpresa] = useState("");
   const [setor, setSetor] = useState("");
   const [itens, setItens] = useState(emptyItens);
   const [outros, setOutros] = useState("");
@@ -874,6 +881,7 @@ function RequisicaoForm({ onSubmit, itemStatus }) {
     const missing = [];
     if (!nome) missing.push("Seu nome");
     if (!email) missing.push("Seu e-mail");
+    if (!empresa) missing.push("Empresa");
     if (!setor) missing.push("Setor");
     if (!hasAnyItem) missing.push("pelo menos 1 item com quantidade (ou preencha Outros)");
     if (missing.length) {
@@ -882,10 +890,10 @@ function RequisicaoForm({ onSubmit, itemStatus }) {
     }
     setError("");
     setBusy(true);
-    const p = await onSubmit({ nome, email, setor, itens, outros });
+    const p = await onSubmit({ nome, email, empresa, setor, itens, outros });
     setBusy(false);
     setProtocol(p);
-    setNome(""); setEmail(""); setSetor(""); setItens(emptyItens); setOutros("");
+    setNome(""); setEmail(""); setEmpresa(""); setSetor(""); setItens(emptyItens); setOutros("");
   }
 
   if (protocol) {
@@ -917,6 +925,18 @@ function RequisicaoForm({ onSubmit, itemStatus }) {
           </select>
         </Field>
       </div>
+
+      <Field label="Empresa" className="mb-6">
+        <div className="flex gap-2 sm:max-w-md">
+          {EMPRESAS.map(emp => (
+            <button type="button" key={emp} onClick={() => setEmpresa(emp)}
+              className="px-3 py-2 rounded-sm border text-xs font-semibold flex-1"
+              style={{ borderColor: empresa === emp ? "#F2A93B" : "#2C4A6B", background: empresa === emp ? "#F2A93B" : "transparent", color: empresa === emp ? "#1F2937" : "#9FB0C4" }}>
+              {emp}
+            </button>
+          ))}
+        </div>
+      </Field>
 
       <div className="grid sm:grid-cols-2 gap-6 mb-5">
         <div>
@@ -1118,6 +1138,17 @@ function reqItemsList(req) {
   return list;
 }
 
+// Empresa de uma requisição. Requisições novas guardam a empresa escolhida no formulário;
+// as antigas (sem esse campo) só são atribuídas quando o nome do setor já indica a empresa
+// (ex: "LOGÍSTICA PISA", "TI KING"). Setores neutros (ex: "COMPRAS") ficam sem empresa.
+function empresaDaRequisicao(r) {
+  if (r.empresa) return r.empresa;
+  const s = (r.setor || "").toUpperCase();
+  if (s.includes("PISA")) return "PISA";
+  if (s.includes("KING")) return "KING OURO";
+  return null;
+}
+
 function ItemStatusRow({ label, status, onChange }) {
   const [open, setOpen] = useState(false);
   const current = ITEM_STATUS[status];
@@ -1167,7 +1198,7 @@ function RequisicaoCard({ r, onToggleItem }) {
           <p className="text-sm font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#fff" }}>
             {r.id} <span className="font-normal" style={{ color: "#7C8CA0" }}>· aberta em {timeLabel(r.createdAt)}</span>
           </p>
-          <p className="text-xs mt-0.5" style={{ color: "#9FB0C4" }}>{r.nome} · {r.setor} · {r.email}</p>
+          <p className="text-xs mt-0.5" style={{ color: "#9FB0C4" }}>{empresaDaRequisicao(r) ? `${empresaDaRequisicao(r)} · ` : ""}{r.nome} · {r.setor} · {r.email}</p>
           <p className="text-xs mt-2" style={{ color: "#D7DEE7" }}>{itemsSummary(r)}</p>
           <p className="text-[11px] mt-1 font-medium" style={{ color: "#7C8CA0" }}>{doneCount}/{items.length} itens entregues</p>
         </div>
@@ -1219,9 +1250,9 @@ function downloadCsv(filename, rows) {
 }
 
 function exportRequisicoesCsv(requisicoes) {
-  const header = ["Protocolo", "Nome", "Email", "Setor", "Data de abertura", "Itens", "Outros", "Status"];
+  const header = ["Protocolo", "Nome", "Email", "Empresa", "Setor", "Data de abertura", "Itens", "Outros", "Status"];
   const rows = requisicoes.map(r => [
-    r.id, r.nome, r.email, r.setor, timeLabel(r.createdAt),
+    r.id, r.nome, r.email, empresaDaRequisicao(r) || "", r.setor, timeLabel(r.createdAt),
     Object.entries(r.itens || {}).filter(([, q]) => q > 0).map(([k, q]) => `${k} x${q}`).join("; "),
     r.outros || "",
     r.status,
@@ -1434,22 +1465,49 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
   const [empresaFilter, setEmpresaFilter] = useState("todas");
   const [reqFilter, setReqFilter] = useState("todas");
 
-  const filteredTickets = (tickets || [])
-    .filter(t => filter === "todos" || t.status === filter)
-    .filter(t => empresaFilter === "todas" || t.empresa === empresaFilter);
+  // filtro de empresa GLOBAL: vale para chamados, requisições e dashboard
+  const ticketsEmpresa = (tickets || []).filter(t => empresaFilter === "todas" || t.empresa === empresaFilter);
+  const filteredTickets = ticketsEmpresa.filter(t => filter === "todos" || t.status === filter);
 
-  const filteredReq = (requisicoes || []).filter(r => reqFilter === "todas" || r.status === reqFilter);
+  const reqsEmpresa = (requisicoes || []).filter(r => empresaFilter === "todas" || empresaDaRequisicao(r) === empresaFilter);
+  const filteredReq = reqsEmpresa.filter(r => reqFilter === "todas" || r.status === reqFilter);
+
+  const reqsSemEmpresa = empresaFilter === "todas" ? 0 : (requisicoes || []).filter(r => !empresaDaRequisicao(r)).length;
+  const empresasVisiveis = empresaFilter === "todas" ? EMPRESAS : [empresaFilter];
+  const empresaTitulo = empresaFilter === "todas" ? "" : ` — ${empresaFilter}`;
+  const semEmpresaNote = reqsSemEmpresa > 0 ? (
+    <p className="text-[11px] mb-3" style={{ color: "#7C8CA0" }}>
+      {reqsSemEmpresa} requisição{reqsSemEmpresa === 1 ? "" : "ões"} antiga{reqsSemEmpresa === 1 ? "" : "s"} sem empresa definida {reqsSemEmpresa === 1 ? "não aparece" : "não aparecem"} neste filtro — veja em “Todas as empresas”.
+    </p>
+  ) : null;
 
   return (
     <div>
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <p className="text-[10px] font-semibold" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>EMPRESA</p>
+        <div className="flex flex-wrap gap-2">
+          {["todas", ...EMPRESAS].map(emp => (
+            <button type="button" key={emp} onClick={() => setEmpresaFilter(emp)}
+              className="px-3 py-1.5 rounded-sm border text-xs font-semibold"
+              style={{
+                borderColor: empresaFilter === emp ? "#F2A93B" : "#2C4A6B",
+                background: empresaFilter === emp ? "#F2A93B" : "transparent",
+                color: empresaFilter === emp ? "#1F2937" : "#9FB0C4",
+              }}>
+              {emp === "todas" ? "Todas as empresas" : emp}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="inline-flex rounded-sm border p-1 mb-6" style={{ borderColor: "#223751", background: "#0F1E30" }}>
         <button type="button" onClick={() => setView("chamados")} className="px-4 py-1.5 rounded-sm text-sm font-semibold"
           style={{ background: view === "chamados" ? "#F2A93B" : "transparent", color: view === "chamados" ? "#1F2937" : "#9FB0C4" }}>
-          Chamados
+          Chamados{tickets !== null && <span className="ml-1.5 text-[11px] font-medium opacity-70">{ticketsEmpresa.length}</span>}
         </button>
         <button type="button" onClick={() => setView("materiais")} className="px-4 py-1.5 rounded-sm text-sm font-semibold"
           style={{ background: view === "materiais" ? "#F2A93B" : "transparent", color: view === "materiais" ? "#1F2937" : "#9FB0C4" }}>
-          Requisições de Materiais
+          Requisições de Materiais{requisicoes !== null && <span className="ml-1.5 text-[11px] font-medium opacity-70">{reqsEmpresa.length}</span>}
         </button>
         <button type="button" onClick={() => setView("dashboard")} className="px-4 py-1.5 rounded-sm text-sm font-semibold"
           style={{ background: view === "dashboard" ? "#F2A93B" : "transparent", color: view === "dashboard" ? "#1F2937" : "#9FB0C4" }}>
@@ -1461,14 +1519,15 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
         tickets === null ? <EmptyState icon={Clock} title="Carregando..." body="Buscando chamados." /> :
         <div>
           <div className="grid sm:grid-cols-2 gap-5 mb-8">
-            {EMPRESAS.map(emp => (
+            {empresasVisiveis.map(emp => (
               <DashboardEmpresa key={emp} empresa={emp} tickets={tickets} />
             ))}
           </div>
-          <p className="text-[11px] font-semibold mb-3" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>MATERIAIS MAIS SOLICITADOS</p>
+          <p className="text-[11px] font-semibold mb-3" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>MATERIAIS MAIS SOLICITADOS{empresaTitulo}</p>
+          {semEmpresaNote}
           {requisicoes === null
             ? <EmptyState icon={Clock} title="Carregando..." body="Buscando requisições." />
-            : <DashboardMateriais requisicoes={requisicoes} />}
+            : <DashboardMateriais key={empresaFilter} requisicoes={reqsEmpresa} />}
         </div>
       )}
 
@@ -1484,17 +1543,6 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
                   <button type="button" key={f} onClick={() => setFilter(f)} className="px-3 py-1.5 rounded-sm border text-xs font-semibold capitalize"
                     style={{ borderColor: filter === f ? "#F2A93B" : "#2C4A6B", background: filter === f ? "#F2A93B" : "transparent", color: filter === f ? "#1F2937" : "#9FB0C4" }}>
                     {f === "todos" ? "Todos" : STATUS[f].label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <p className="text-[10px] font-semibold mb-2" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>EMPRESA</p>
-              <div className="flex flex-wrap gap-2">
-                {["todas", ...EMPRESAS].map(emp => (
-                  <button type="button" key={emp} onClick={() => setEmpresaFilter(emp)} className="px-3 py-1.5 rounded-sm border text-xs font-semibold"
-                    style={{ borderColor: empresaFilter === emp ? "#F2A93B" : "#2C4A6B", background: empresaFilter === emp ? "#F2A93B" : "transparent", color: empresaFilter === emp ? "#1F2937" : "#9FB0C4" }}>
-                    {emp === "todas" ? "Todas as empresas" : emp}
                   </button>
                 ))}
               </div>
@@ -1528,7 +1576,8 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
 
       {view === "materiais" && (
         <div>
-          <p className="text-[11px] font-semibold mb-3" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>PEDIDOS RECEBIDOS</p>
+          <p className="text-[11px] font-semibold mb-3" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>PEDIDOS RECEBIDOS{empresaTitulo}</p>
+          {semEmpresaNote}
           {requisicoes === null ? <EmptyState icon={Clock} title="Carregando..." body="Buscando requisições." /> :
           requisicoes.length === 0 ? <EmptyState icon={Inbox} title="Nenhuma requisição ainda" body="Assim que alguém enviar uma requisição de materiais, ela aparece aqui." /> :
           <div>
@@ -1544,7 +1593,7 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
               </div>
             </div>
             {filteredReq.length === 0 && (
-              <EmptyState icon={Inbox} title="Nenhuma requisição com esse filtro" body="Tente outro status." />
+              <EmptyState icon={Inbox} title="Nenhuma requisição com esse filtro" body="Tente outro status ou outra empresa." />
             )}
             <div className="space-y-2">
               {filteredReq.map(r => (
@@ -1576,9 +1625,11 @@ function TicketDetail({ ticket, thread, viewer, onBack, onSend, onStatusChange }
     }
   }, [ticket.id, ticket.hasAnexo]);
 
+  const chatEncerrado = ticket.status === "resolvido";
+
   function handleSend(e) {
     e.preventDefault();
-    if (!msg.trim()) return;
+    if (chatEncerrado || !msg.trim()) return;
     onSend(msg);
     setMsg("");
   }
@@ -1635,9 +1686,9 @@ function TicketDetail({ ticket, thread, viewer, onBack, onSend, onStatusChange }
       </div>
 
       <div className="rounded-md border mb-4 flex flex-col" style={{ background: "#132234", borderColor: "#223751", height: 340 }}>
-        <div className="px-4 py-2.5 border-b text-xs font-semibold flex items-center gap-1.5" style={{ borderColor: "#223751", color: "#fff" }}><Send size={12} /> chat do chamado</div>
+        <div className="px-4 py-2.5 border-b text-xs font-semibold flex items-center gap-1.5" style={{ borderColor: "#223751", color: "#fff" }}><Send size={12} /> chat do chamado{chatEncerrado && <span className="ml-1 font-medium" style={{ color: "#7C8CA0" }}>· encerrado</span>}</div>
         <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
-          {thread.chat.length === 0 && <p className="text-xs text-center mt-8" style={{ color: "#5B6B80" }}>Nenhuma mensagem ainda. Envie a primeira.</p>}
+          {thread.chat.length === 0 && <p className="text-xs text-center mt-8" style={{ color: "#5B6B80" }}>{chatEncerrado ? "Chat encerrado. Nenhuma mensagem foi trocada." : "Nenhuma mensagem ainda. Envie a primeira."}</p>}
           {thread.chat.map((m, i) => {
             const mine = m.sender === viewer;
             return (
@@ -1651,10 +1702,22 @@ function TicketDetail({ ticket, thread, viewer, onBack, onSend, onStatusChange }
           })}
           <div ref={bottomRef} />
         </div>
+        {chatEncerrado ? (
+          <div className="flex items-start gap-2 p-3 border-t text-xs" style={{ borderColor: "#223751", color: "#9FB0C4", background: "#0F1E30" }}>
+            <Lock size={14} style={{ color: "#7C8CA0", marginTop: 1, flexShrink: 0 }} />
+            <span>
+              Chamado resolvido — chat encerrado.{" "}
+              {viewer === "facilities"
+                ? "Para voltar a conversar, reabra o chamado (marcar como aberto ou em andamento)."
+                : "Precisa de algo mais? Abra um novo chamado."}
+            </span>
+          </div>
+        ) : (
         <form onSubmit={handleSend} className="flex gap-2 p-3 border-t" style={{ borderColor: "#223751" }}>
           <input value={msg} onChange={e => setMsg(e.target.value)} placeholder="Escreva uma mensagem..." className="flex-1 px-3 py-2 rounded-sm border text-sm" style={{ background: "#0F1E30", borderColor: "#2C4A6B", color: "#fff" }} />
           <button type="submit" className="px-3 rounded-sm" style={{ background: "#F2A93B" }}><Send size={15} style={{ color: "#1F2937" }} /></button>
         </form>
+        )}
       </div>
 
       <div className="rounded-md border" style={{ background: "#132234", borderColor: "#223751" }}>
