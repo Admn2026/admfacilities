@@ -1774,7 +1774,7 @@ function TicketDetail({ ticket, thread, viewer, onBack, onSend, onStatusChange }
         <p className="text-xs font-semibold mb-2" style={{ color: "#F2A93B" }}>
           {catInfo(ticket.categoria).label}{ticket.subcategoria ? ` · ${ticket.subcategoria}` : ""}
         </p>
-        <p className="text-sm mb-3" style={{ color: "#D7DEE7" }}>{ticket.descricao}</p>
+        <p className="text-sm mb-3" style={{ color: "#D7DEE7", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{ticket.descricao}</p>
         {ticket.hasAnexo && !anexo && (
           <p className="text-xs mb-3" style={{ color: "#7C8CA0" }}>Carregando anexo...</p>
         )}
@@ -1817,7 +1817,7 @@ function TicketDetail({ ticket, thread, viewer, onBack, onSend, onStatusChange }
               <div key={i} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
                 <div className="max-w-[75%]">
                   <p className="text-[10px] mb-0.5" style={{ color: "#7C8CA0", textAlign: mine ? "right" : "left" }}>{m.sender === "usuario" ? "solicitante" : "facilities"} · {timeLabel(m.time)}</p>
-                  <div className="px-3 py-2 rounded-md text-sm" style={{ background: mine ? "#F2A93B" : "#1B2E45", color: mine ? "#1F2937" : "#E7ECF2" }}>{m.text}</div>
+                  <div className="px-3 py-2 rounded-md text-sm" style={{ background: mine ? "#F2A93B" : "#1B2E45", color: mine ? "#1F2937" : "#E7ECF2", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{m.text}</div>
                 </div>
               </div>
             );
