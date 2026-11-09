@@ -363,6 +363,8 @@ function FacilitiesApp() {
   const [selected, setSelected] = useState(null);
   const [thread, setThread] = useState({ chat: [], notif: [] });
   const [painelAuth, setPainelAuth] = useState(false);
+  const [painelEmpresa, setPainelEmpresa] = useState(null); // null = ainda não escolheu a empresa
+  const [painelBusca, setPainelBusca] = useState(""); // busca por nome do solicitante
   const pollRef = useRef(null);
   const ticketsRevRef = useRef(null);
   const requisicoesRevRef = useRef(null);
@@ -460,6 +462,38 @@ function FacilitiesApp() {
     return protocol;
   }
 
+  // Move TODOS os chamados e requisições da KING OURO para a PISA (com backup + confirmação)
+  async function moverKingParaPisa() {
+    const [allTickets, allReq] = await Promise.all([loadTickets(), loadRequisicoes()]);
+    const tk = allTickets.filter(t => t.empresa === "KING OURO");
+    const rq = allReq.filter(r => empresaDaRequisicao(r) === "KING OURO");
+    if (tk.length === 0 && rq.length === 0) { alert("Não há dados da KING OURO para mover."); return; }
+
+    const resposta = window.prompt(
+      `Isto vai mover ${tk.length} chamado(s) e ${rq.length} requisição(ões) da KING OURO para a PISA.\n\n` +
+      `A ação vale para TODOS os usuários e não pode ser desfeita pelo app. Um arquivo de backup será baixado antes.\n\n` +
+      `Para confirmar, digite MOVER:`
+    );
+    if (resposta === null || resposta.trim().toUpperCase() !== "MOVER") { alert("Operação cancelada. Nada foi alterado."); return; }
+
+    // 1) backup dos registros ORIGINAIS (antes de qualquer alteração)
+    const backup = { geradoEm: new Date().toISOString(), descricao: "Backup antes de mover KING OURO -> PISA", chamados: tk, requisicoes: rq };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `backup_king_ouro_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+
+    // 2) altera apenas o campo empresa (guarda a origem em "movidoDe"); demais campos e datas ficam como estão
+    const novosTickets = allTickets.map(t => t.empresa === "KING OURO" ? { ...t, empresa: "PISA", movidoDe: "KING OURO" } : t);
+    const novasReq = allReq.map(r => empresaDaRequisicao(r) === "KING OURO" ? { ...r, empresa: "PISA", movidoDe: "KING OURO" } : r);
+    if (tk.length > 0) await saveTickets(novosTickets);
+    if (rq.length > 0) await saveRequisicoes(novasReq);
+    await Promise.all([refreshTickets(true), refreshRequisicoes(true)]);
+    alert(`Pronto: ${tk.length} chamado(s) e ${rq.length} requisição(ões) agora constam como PISA.\nO backup foi baixado no seu computador.`);
+  }
+
   async function updateStatus(id, statusKey) {
     const current = await loadTickets();
     const updated = current.map(t => t.id === id ? { ...t, status: statusKey, updatedAt: new Date().toISOString() } : t);
@@ -554,12 +588,12 @@ function FacilitiesApp() {
                 <Building2 size={20} color="#F2A93B" />
                 <h1 className="text-white text-base font-semibold leading-none" style={{ fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em" }}>CENTRAL DE FACILITIES</h1>
               </div>
-              <button type="button" onClick={() => { setTab("home"); setSelected(null); }}
+              <button type="button" onClick={() => { setTab("home"); setSelected(null); setPainelEmpresa(null); setPainelBusca(""); }}
                 className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-sm" style={{ color: "#9FB0C4" }}>
                 <ChevronLeft size={14} /> início
               </button>
               {tab === "painel" && painelAuth && (
-                <button type="button" onClick={() => { setPainelAuth(false); setTab("home"); setSelected(null); }}
+                <button type="button" onClick={() => { setPainelAuth(false); setTab("home"); setSelected(null); setPainelEmpresa(null); setPainelBusca(""); }}
                   className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-sm" style={{ color: "#9FB0C4" }}>
                   sair
                 </button>
@@ -582,7 +616,7 @@ function FacilitiesApp() {
                 ? <PainelLogin onSuccess={() => setPainelAuth(true)} />
                 : selectedTicket
                   ? <TicketDetail ticket={selectedTicket} thread={thread} viewer="facilities" onBack={() => setSelected(null)} onSend={(text) => sendChat(selectedTicket.id, "facilities", text)} onStatusChange={(s) => updateStatus(selectedTicket.id, s)} />
-                  : <PainelEquipe tickets={tickets} requisicoes={requisicoes} itemStatus={itemStatus} onOpen={(id) => setSelected(id)} onUpdateRequisicao={updateRequisicaoStatus} onToggleReqItem={updateRequisicaoItemEntregue} />
+                  : <PainelEquipe onMoverKingParaPisa={moverKingParaPisa} busca={painelBusca} setBusca={setPainelBusca} empresaFilter={painelEmpresa} setEmpresaFilter={setPainelEmpresa} tickets={tickets} requisicoes={requisicoes} itemStatus={itemStatus} onOpen={(id) => setSelected(id)} onUpdateRequisicao={updateRequisicaoStatus} onToggleReqItem={updateRequisicaoItemEntregue} />
             )}
           </main>
         </div>
@@ -1459,18 +1493,33 @@ function DashboardEmpresa({ empresa, tickets }) {
   );
 }
 
-function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequisicao, onUpdateItemStatus, onToggleReqItem }) {
+function PainelEquipe({ onMoverKingParaPisa, busca, setBusca, empresaFilter, setEmpresaFilter, tickets, requisicoes, itemStatus, onOpen, onUpdateRequisicao, onUpdateItemStatus, onToggleReqItem }) {
   const [view, setView] = useState("chamados");
   const [filter, setFilter] = useState("todos");
-  const [empresaFilter, setEmpresaFilter] = useState("todas");
   const [reqFilter, setReqFilter] = useState("todas");
 
   // filtro de empresa GLOBAL: vale para chamados, requisições e dashboard
+  const norm = (x) => (x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const termo = norm(busca);
   const ticketsEmpresa = (tickets || []).filter(t => empresaFilter === "todas" || t.empresa === empresaFilter);
-  const filteredTickets = ticketsEmpresa.filter(t => filter === "todos" || t.status === filter);
+  const filteredTickets = ticketsEmpresa.filter(t => (filter === "todos" || t.status === filter) && (!termo || norm(t.nome).includes(termo)));
 
   const reqsEmpresa = (requisicoes || []).filter(r => empresaFilter === "todas" || empresaDaRequisicao(r) === empresaFilter);
-  const filteredReq = reqsEmpresa.filter(r => reqFilter === "todas" || r.status === reqFilter);
+  const filteredReq = reqsEmpresa.filter(r => (reqFilter === "todas" || r.status === reqFilter) && (!termo || norm(r.nome).includes(termo)));
+
+  const campoBusca = (
+    <div className="mt-4">
+      <p className="text-[10px] font-semibold mb-2" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>SOLICITANTE</p>
+      <div className="flex items-center gap-2">
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar pelo nome da pessoa..."
+          className="w-full sm:w-80 px-3 py-1.5 rounded-sm border text-xs" style={{ background: "#0A141F", borderColor: "#2C4A6B", color: "#fff" }} />
+        {busca && (
+          <button type="button" onClick={() => setBusca("")} className="px-3 py-1.5 rounded-sm border text-xs font-semibold"
+            style={{ borderColor: "#2C4A6B", color: "#9FB0C4" }}>limpar</button>
+        )}
+      </div>
+    </div>
+  );
 
   const reqsSemEmpresa = empresaFilter === "todas" ? 0 : (requisicoes || []).filter(r => !empresaDaRequisicao(r)).length;
   const empresasVisiveis = empresaFilter === "todas" ? EMPRESAS : [empresaFilter];
@@ -1481,22 +1530,92 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
     </p>
   ) : null;
 
+  // ---- Tela inicial do painel: escolher a empresa ----
+  if (empresaFilter === null) {
+    const stats = (emp) => {
+      const tk = (tickets || []).filter(t => t.empresa === emp);
+      const rq = (requisicoes || []).filter(r => empresaDaRequisicao(r) === emp);
+      return {
+        chamados: tickets === null ? "—" : tk.length,
+        abertos: tickets === null ? "—" : tk.filter(t => t.status === "aberto").length,
+        requisicoes: requisicoes === null ? "—" : rq.length,
+        pendentes: requisicoes === null ? "—" : rq.filter(r => r.status === "pendente").length,
+      };
+    };
+    return (
+      <div className="py-6">
+        <div className="text-center mb-8">
+          <p className="text-[11px] font-semibold mb-2" style={{ color: "#F2A93B", letterSpacing: "0.2em" }}>PAINEL DA EQUIPE</p>
+          <h2 className="text-3xl font-bold mb-2" style={{ fontFamily: "'Oswald', sans-serif", color: "#fff" }}>
+            Qual <span style={{ color: "#F2A93B" }}>empresa</span> deseja acompanhar?
+          </h2>
+          <p className="text-sm" style={{ color: "#9FB0C4" }}>Escolha uma empresa para ver chamados, requisições e dashboard separados.</p>
+        </div>
+        <div className="grid gap-5 sm:grid-cols-2 max-w-3xl mx-auto">
+          {EMPRESAS.map(emp => {
+            const st = stats(emp);
+            return (
+              <button type="button" key={emp} onClick={() => setEmpresaFilter(emp)}
+                className="text-left rounded-md overflow-hidden group" style={{ background: "#132234", border: "1px solid #223751" }}>
+                <div style={{ height: 3, background: "linear-gradient(90deg, #F2A93B 0%, #F2A93B33 100%)" }} />
+                <div className="p-6">
+                  <div className="w-10 h-10 rounded-sm flex items-center justify-center mb-4" style={{ background: "#1B2E45" }}>
+                    <Building2 size={18} color="#F2A93B" />
+                  </div>
+                  <h3 className="text-2xl font-bold mb-4" style={{ fontFamily: "'Oswald', sans-serif", color: "#fff" }}>{emp}</h3>
+                  <div className="grid grid-cols-2 gap-3 mb-5">
+                    <div className="rounded-sm p-3" style={{ background: "#0F1E30" }}>
+                      <p className="text-[10px] font-semibold mb-1" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>CHAMADOS</p>
+                      <p className="text-xl font-bold" style={{ color: "#fff" }}>{st.chamados}</p>
+                      <p className="text-[11px]" style={{ color: "#9FB0C4" }}>{st.abertos} aberto(s)</p>
+                    </div>
+                    <div className="rounded-sm p-3" style={{ background: "#0F1E30" }}>
+                      <p className="text-[10px] font-semibold mb-1" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>REQUISIÇÕES</p>
+                      <p className="text-xl font-bold" style={{ color: "#fff" }}>{st.requisicoes}</p>
+                      <p className="text-[11px]" style={{ color: "#9FB0C4" }}>{st.pendentes} pendente(s)</p>
+                    </div>
+                  </div>
+                  <div className="border-t pt-4 flex justify-end" style={{ borderColor: "#223751" }}>
+                    <span className="text-[11px] font-semibold group-hover:opacity-80" style={{ color: "#F2A93B", letterSpacing: "0.05em" }}>ENTRAR →</span>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div className="text-center mt-6">
+          <button type="button" onClick={() => setEmpresaFilter("todas")} className="text-xs font-semibold px-3 py-1.5 rounded-sm border"
+            style={{ borderColor: "#2C4A6B", color: "#9FB0C4" }}>
+            Ver todas as empresas juntas
+          </button>
+        </div>
+        {tickets !== null && requisicoes !== null &&
+          ((tickets || []).some(t => t.empresa === "KING OURO") || (requisicoes || []).some(r => empresaDaRequisicao(r) === "KING OURO")) && (
+          <div className="text-center mt-10 pt-6 border-t max-w-3xl mx-auto" style={{ borderColor: "#223751" }}>
+            <p className="text-[10px] font-semibold mb-2" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>MANUTENÇÃO DOS DADOS</p>
+            <button type="button" onClick={onMoverKingParaPisa} className="text-xs font-semibold px-3 py-1.5 rounded-sm border"
+              style={{ borderColor: "#B5483A", color: "#E08A7E" }}>
+              Mover todos os dados da KING OURO para a PISA
+            </button>
+            <p className="text-[11px] mt-2" style={{ color: "#7C8CA0" }}>Pede confirmação e baixa um backup antes de alterar.</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <p className="text-[10px] font-semibold" style={{ color: "#7C8CA0", letterSpacing: "0.1em" }}>EMPRESA</p>
-        <div className="flex flex-wrap gap-2">
-          {["todas", ...EMPRESAS].map(emp => (
-            <button type="button" key={emp} onClick={() => setEmpresaFilter(emp)}
-              className="px-3 py-1.5 rounded-sm border text-xs font-semibold"
-              style={{
-                borderColor: empresaFilter === emp ? "#F2A93B" : "#2C4A6B",
-                background: empresaFilter === emp ? "#F2A93B" : "transparent",
-                color: empresaFilter === emp ? "#1F2937" : "#9FB0C4",
-              }}>
-              {emp === "todas" ? "Todas as empresas" : emp}
-            </button>
-          ))}
+        <button type="button" onClick={() => { setEmpresaFilter(null); setBusca(""); }} className="flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-sm border"
+          style={{ borderColor: "#2C4A6B", color: "#9FB0C4" }}>
+          <ChevronLeft size={14} /> trocar empresa
+        </button>
+        <div className="flex items-center gap-2">
+          <Building2 size={16} color="#F2A93B" />
+          <h2 className="text-lg font-bold" style={{ fontFamily: "'Oswald', sans-serif", color: "#fff", letterSpacing: "0.02em" }}>
+            {empresaFilter === "todas" ? "TODAS AS EMPRESAS" : empresaFilter}
+          </h2>
         </div>
       </div>
 
@@ -1547,20 +1666,22 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
                 ))}
               </div>
             </div>
+            {campoBusca}
           </div>
           {filteredTickets.length === 0 && (
-            <EmptyState icon={Inbox} title="Nenhum chamado com esse filtro" body="Tente outro status ou outra empresa." />
+            <EmptyState icon={Inbox} title="Nenhum chamado com esse filtro" body="Tente outro status, outro nome ou limpe a busca." />
           )}
           <div className="space-y-2">
             {filteredTickets.map(t => {
               const TIcon = catInfo(t.categoria).icon;
               return (
                 <button type="button" key={t.id} onClick={() => onOpen(t.id)}
-                  className="w-full text-left p-4 rounded-md border grid items-center gap-3 sm:grid-cols-[36px_120px_110px_1fr_120px]"
+                  className="w-full text-left p-4 rounded-md border grid items-center gap-3 sm:grid-cols-[36px_120px_90px_150px_1fr_120px]"
                   style={{ background: "#132234", borderColor: "#223751" }}>
                   <div className="w-9 h-9 rounded-sm flex items-center justify-center shrink-0" style={{ background: "#1B2E45" }}><TIcon size={16} style={{ color: "#F2A93B" }} /></div>
                   <p className="text-sm font-semibold truncate" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#fff" }}>{t.id}</p>
                   <span className="text-[10px] font-semibold uppercase truncate" style={{ color: "#7C8CA0" }}>{t.empresa || "—"}</span>
+                  <p className="text-xs font-medium truncate" style={{ color: "#D7DEE7" }} title={t.nome}>{t.nome || "—"}</p>
                   <p className="text-xs truncate" style={{ color: "#9FB0C4" }}>
                     {catInfo(t.categoria).label}{t.subcategoria ? ` · ${t.subcategoria}` : ""} · {t.local}
                   </p>
@@ -1591,9 +1712,10 @@ function PainelEquipe({ tickets, requisicoes, itemStatus, onOpen, onUpdateRequis
                   </button>
                 ))}
               </div>
+              {campoBusca}
             </div>
             {filteredReq.length === 0 && (
-              <EmptyState icon={Inbox} title="Nenhuma requisição com esse filtro" body="Tente outro status ou outra empresa." />
+              <EmptyState icon={Inbox} title="Nenhuma requisição com esse filtro" body="Tente outro status, outro nome ou limpe a busca." />
             )}
             <div className="space-y-2">
               {filteredReq.map(r => (
